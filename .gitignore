@@ -1,0 +1,15 @@
+# Compiled binaries and object files
+build/
+*.exe
+*.o
+*.obj
+*.out
+
+# Local CRUD database files
+data/*.dat
+*.dat
+*.db
+
+# IDE config folders
+.vscode/
+.vs/
