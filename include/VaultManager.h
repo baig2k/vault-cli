@@ -15,6 +15,7 @@ public:
     void listRecords();
     bool getRecord(int id);
     bool updateRecord(int id, const char new_payload[]);
+    void searchRecords(const char keyword[]);
     bool deleteRecord(int id);
     bool compact();
 };

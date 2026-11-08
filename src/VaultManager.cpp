@@ -217,3 +217,67 @@ bool VaultManager::compact() {
     cout << "[OK] Cleaned up " << removed_count << " deleted record(s).\n";
     return true;
 }
+
+char toLowerChar(char c) {
+    if (c >= 'A' && c <= 'Z') {
+        return c + 32;
+    }
+    return c;
+}
+
+// Helper 2: Checks if 'keyword' appears anywhere inside 'text'
+bool containsText(const char text[], const char keyword[]) {
+    // If keyword is empty, it matches everything
+    if (keyword[0] == '\0') return true;
+
+    int i = 0;
+    // Outer loop: Try starting the match at every letter of 'text'
+    while (text[i] != '\0') {
+        int j = 0;
+        // Inner loop: Keep matching characters as long as they are equal
+        while (keyword[j] != '\0' && text[i + j] != '\0' &&
+               toLowerChar(text[i + j]) == toLowerChar(keyword[j])) {
+            j++;
+        }
+
+        // If we reached the end of 'keyword' ('\0'), every single letter matched!
+        if (keyword[j] == '\0') {
+            return true;
+        }
+        i++;
+    }
+
+    return false;
+}
+
+// 7. SEARCH: Scan the file and print records matching the keyword
+void VaultManager::searchRecords(const char keyword[]) {
+    ifstream file(file_path, ios::binary);
+    if (!file.is_open()) {
+        cout << "[Error] Could not open vault file!\n";
+        return;
+    }
+
+    VaultRecord rec;
+    int match_count = 0;
+
+    cout << "\nSearch Results for \"" << keyword << "\":\n";
+    cout << "ID  | Category     | Title\n";
+    cout << "----+--------------+--------------------------------\n";
+
+    while (file.read((char*)&rec, sizeof(VaultRecord))) {
+        if (rec.is_deleted == false) {
+            // Check if keyword is in the category OR in the title
+            if (containsText(rec.category, keyword) || containsText(rec.title, keyword)) {
+                cout << rec.id << "   | " << rec.category << "          | " << rec.title << "\n";
+                match_count++;
+            }
+        }
+    }
+
+    if (match_count == 0) {
+        cout << "(No matching records found)\n";
+    }
+    cout << "\n";
+    file.close();
+}

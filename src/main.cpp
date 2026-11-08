@@ -12,6 +12,7 @@ void printHelp() {
     cout << "  update <id> <new_payload>         : Change the payload of record #id\n";
     cout << "  delete <id>                       : Soft-delete record #id\n";
     cout << "  compact                           : Permanently remove deleted records\n\n";
+    cout << "  search <keyword>                  : Find records by category or title\n";
 }
 
 // Helper 2: Converts a C-string like "12" into the integer 12 using basic PF ASCII math
@@ -88,6 +89,14 @@ int main(int argc, char* argv[]) {
     else if (command == "compact") {
         vault.compact();
     }
+    // 7. SEARCH: ./build/vault.exe search <keyword> (needs 3 words total)
+    else if (command == "search") {
+    if (argc < 3) {
+        cout << "[Error] Missing keyword! Usage: vault search <keyword>\n";
+        return 1;
+    }
+    vault.searchRecords(argv[2]);
+}
     // Unknown command typed
     else {
         cout << "[Error] Unknown command: '" << command << "'\n";
