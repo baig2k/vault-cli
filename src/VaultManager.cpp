@@ -4,42 +4,113 @@
 #include <cstdio>
 using namespace std;
 
+// Constructor: Opens/creates vault.dat and builds the Free-List Stack in RAM
 VaultManager::VaultManager(const char* path) {
     file_path = path;
+    free_stack_top = nullptr;
 
-    // Try opening the file to see if it exists
     ifstream check_file(file_path, ios::binary);
     if (!check_file.is_open()) {
-        // If it doesn't exist yet, create an empty binary file
         ofstream create_file(file_path, ios::binary);
         create_file.close();
     } else {
         check_file.close();
     }
+
+    // Scan the file and push any deleted record IDs onto our Stack
+    loadFreeSlotsIntoStack();
 }
 
-// Helper: Counts how many records are inside vault.dat
+// Destructor: Prevents memory leaks by freeing all Stack nodes when program exits
+VaultManager::~VaultManager() {
+    clearStack();
+}
+
+// --- STACK DATA STRUCTURE OPERATIONS ---
+
+void VaultManager::pushFreeId(int id) {
+    FreeSlotNode* new_node = new FreeSlotNode(id);
+    new_node->next = free_stack_top;
+    free_stack_top = new_node;
+}
+
+int VaultManager::popFreeId() {
+    if (free_stack_top == nullptr) return -1;
+
+    FreeSlotNode* temp = free_stack_top;
+    int recycled_id = temp->deleted_id;
+
+    free_stack_top = free_stack_top->next;
+    delete temp;
+
+    return recycled_id;
+}
+
+bool VaultManager::isStackEmpty() {
+    return (free_stack_top == nullptr);
+}
+
+void VaultManager::clearStack() {
+    while (free_stack_top != nullptr) {
+        popFreeId();
+    }
+}
+
+// Scans vault.dat and pushes all soft-deleted IDs onto the Free-List Stack
+void VaultManager::loadFreeSlotsIntoStack() {
+    ifstream file(file_path, ios::binary);
+    if (!file.is_open()) return;
+
+    VaultRecord rec;
+    while (file.read((char*)&rec, sizeof(VaultRecord))) {
+        if (rec.is_deleted == true) {
+            pushFreeId(rec.id);
+        }
+    }
+    file.close();
+}
+
+// Helper: Counts total 360-byte slots on disk
 int VaultManager::getTotalRecords() {
     ifstream file(file_path, ios::binary);
     if (!file.is_open()) return 0;
 
-    // Move the reading cursor to the very end of the file (ios::end)
     file.seekg(0, ios::end);
-
-    // tellg() tells us what byte number we are at (which equals total file size in bytes)
     int total_bytes = file.tellg();
     file.close();
 
-    // Divide total file bytes by 360 to get the number of records
     return total_bytes / sizeof(VaultRecord);
 }
 
-// 1. CREATE: Add a new record to the end of the file
+// --- CRUD OPERATIONS (UPGRADED WITH STACK SLOT RECYCLING) ---
+
+// 1. CREATE: Recycles a deleted slot from the Stack if available; otherwise appends!
 bool VaultManager::addRecord(const char category[], const char title[], const char payload[]) {
+    // Check our Stack first!
+    if (!isStackEmpty()) {
+        int recycled_id = popFreeId();
+        VaultRecord rec(recycled_id, category, title, payload);
+        rec.toggleEncryption();
+
+        // Open with ios::in | ios::out so we can jump to the middle and overwrite the dead slot
+        fstream file(file_path, ios::binary | ios::in | ios::out);
+        if (!file.is_open()) {
+            cout << "[Error] Could not open vault file!\n";
+            return false;
+        }
+
+        int byte_position = recycled_id * sizeof(VaultRecord);
+        file.seekp(byte_position);
+        file.write((char*)&rec, sizeof(VaultRecord));
+        file.close();
+
+        cout << "[OK] Recycled deleted slot #" << recycled_id << " from Stack for (" << title << ")\n";
+        return true;
+    }
+
+    // If Stack is empty (no deleted holes exist), append to the end as usual
     int next_id = getTotalRecords();
     VaultRecord rec(next_id, category, title, payload);
-
-    // Scramble the payload BEFORE writing to disk
     rec.toggleEncryption();
 
     ofstream file(file_path, ios::binary | ios::app);
@@ -55,7 +126,7 @@ bool VaultManager::addRecord(const char category[], const char title[], const ch
     return true;
 }
 
-// 2. READ ALL: Loop through the file from start to finish
+// 2. READ ALL
 void VaultManager::listRecords() {
     ifstream file(file_path, ios::binary);
     if (!file.is_open()) {
@@ -69,7 +140,6 @@ void VaultManager::listRecords() {
     cout << "\nID  | Category     | Title\n";
     cout << "----+--------------+--------------------------------\n";
 
-    // Keep reading 360-byte chunks until we hit the end of the file
     while (file.read((char*)&rec, sizeof(VaultRecord))) {
         if (rec.is_deleted == false) {
             cout << rec.id << "   | " << rec.category << "          | " << rec.title << "\n";
@@ -84,7 +154,7 @@ void VaultManager::listRecords() {
     file.close();
 }
 
-// 3. READ ONE: Jump straight to Record #id without reading the whole file
+// 3. READ ONE
 bool VaultManager::getRecord(int id) {
     int total = getTotalRecords();
     if (id < 0 || id >= total) {
@@ -107,7 +177,6 @@ bool VaultManager::getRecord(int id) {
         return false;
     }
 
-    // Unscramble the payload in RAM right before printing it
     rec.toggleEncryption();
 
     cout << "\n=== Record #" << rec.id << " ===\n";
@@ -117,7 +186,7 @@ bool VaultManager::getRecord(int id) {
     return true;
 }
 
-// 4. UPDATE: Overwrite a specific record right where it sits on disk
+// 4. UPDATE
 bool VaultManager::updateRecord(int id, const char new_payload[]) {
     int total = getTotalRecords();
     if (id < 0 || id >= total) {
@@ -140,7 +209,6 @@ bool VaultManager::updateRecord(int id, const char new_payload[]) {
         return false;
     }
 
-    // Copy the new plain-text payload, then scramble it before saving to disk
     rec.copyText(rec.payload, 256, new_payload);
     rec.toggleEncryption();
 
@@ -152,7 +220,7 @@ bool VaultManager::updateRecord(int id, const char new_payload[]) {
     return true;
 }
 
-// 5. DELETE: Mark is_deleted = true on disk
+// 5. DELETE: Marks is_deleted = true AND pushes the ID onto the Free-List Stack
 bool VaultManager::deleteRecord(int id) {
     int total = getTotalRecords();
     if (id < 0 || id >= total) {
@@ -175,17 +243,19 @@ bool VaultManager::deleteRecord(int id) {
         return false;
     }
 
-    // Flip the boolean flag and write the struct back to the same spot
     rec.is_deleted = true;
     file.seekp(byte_position);
     file.write((char*)&rec, sizeof(VaultRecord));
     file.close();
 
-    cout << "[OK] Deleted record #" << id << "\n";
+    // Push the newly freed ID onto our Stack!
+    pushFreeId(id);
+
+    cout << "[OK] Deleted record #" << id << " (Slot pushed to Free-List Stack)\n";
     return true;
 }
 
-// 6. COMPACT: Copy all non-deleted records into a fresh file
+// 6. COMPACT: Purges deleted slots and clears the Free-List Stack
 bool VaultManager::compact() {
     const char* temp_path = "data/vault_temp.dat";
     ifstream in_file(file_path, ios::binary);
@@ -210,14 +280,17 @@ bool VaultManager::compact() {
     in_file.close();
     out_file.close();
 
-    // Delete old file and rename temp file to vault.dat
     remove(file_path);
     rename(temp_path, file_path);
+
+    // Since all holes are gone, clear the Free-List Stack
+    clearStack();
 
     cout << "[OK] Cleaned up " << removed_count << " deleted record(s).\n";
     return true;
 }
 
+// Helper 1: Converts an uppercase letter to lowercase
 char toLowerChar(char c) {
     if (c >= 'A' && c <= 'Z') {
         return c + 32;
@@ -225,32 +298,26 @@ char toLowerChar(char c) {
     return c;
 }
 
-// Helper 2: Checks if 'keyword' appears anywhere inside 'text'
+// Helper 2: Substring search
 bool containsText(const char text[], const char keyword[]) {
-    // If keyword is empty, it matches everything
     if (keyword[0] == '\0') return true;
 
     int i = 0;
-    // Outer loop: Try starting the match at every letter of 'text'
     while (text[i] != '\0') {
         int j = 0;
-        // Inner loop: Keep matching characters as long as they are equal
         while (keyword[j] != '\0' && text[i + j] != '\0' &&
                toLowerChar(text[i + j]) == toLowerChar(keyword[j])) {
             j++;
         }
-
-        // If we reached the end of 'keyword' ('\0'), every single letter matched!
         if (keyword[j] == '\0') {
             return true;
         }
         i++;
     }
-
     return false;
 }
 
-// 7. SEARCH: Scan the file and print records matching the keyword
+// 7. SEARCH
 void VaultManager::searchRecords(const char keyword[]) {
     ifstream file(file_path, ios::binary);
     if (!file.is_open()) {
@@ -267,7 +334,6 @@ void VaultManager::searchRecords(const char keyword[]) {
 
     while (file.read((char*)&rec, sizeof(VaultRecord))) {
         if (rec.is_deleted == false) {
-            // Check if keyword is in the category OR in the title
             if (containsText(rec.category, keyword) || containsText(rec.title, keyword)) {
                 cout << rec.id << "   | " << rec.category << "          | " << rec.title << "\n";
                 match_count++;
